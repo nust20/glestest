@@ -14,8 +14,14 @@ struct ESContext{
 	int width;
 	int height;
 
+	//framebuffer object
+	GLuint fboid;
+    GLuint texIn;
+    GLuint texOut;
+
     //Vertex Buffer Object
-    GLuint vbo[4];
+    GLuint vbo[3];
+    GLuint pboid;
     
     // computer program
     GLuint program;
@@ -150,10 +156,6 @@ int initProgram(){
             "  uint yuv;  \n"
             "};\n"
             "\n"
-            "struct RGBAData{\n"
-            "    uint rgba[4];\n"
-            "};\n"
-            "\n"
             "uniform int stride;\n"
             "\n"
             "const mat4 coef = mat4(\n"
@@ -174,10 +176,7 @@ int initProgram(){
             "    YUVData data[];\n"
             "}VData;\n"
             "\n"
-            "layout(std430, binding=3) writeonly buffer rgbaBuffer{\n"
-            "    RGBAData data[];\n"
-            "}outBuffer;\n"
-            "\n"
+            "layout(binding = 1, rgba32ui) writeonly uniform  uimage2D output_image;\n"
             "void main(void){\n"
             "    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);\n"
             "    int index = pos.y * stride + pos.x;\n"
@@ -188,10 +187,12 @@ int initProgram(){
             "    yuv[3] = vec4(1.0);\n"
             "    mat4 tmp = yuv * coef;\n"
             "    mat4 rgba = transpose(tmp);\n"
-            "    outBuffer.data[index].rgba[0] = packUnorm4x8(rgba[0]);\n"
-            "    outBuffer.data[index].rgba[1] = packUnorm4x8(rgba[1]);\n"
-            "    outBuffer.data[index].rgba[2] = packUnorm4x8(rgba[2]);\n"
-            "    outBuffer.data[index].rgba[3] = packUnorm4x8(rgba[3]);\n"
+			"    uvec4 outdata; \n"
+            "    outdata.x = packUnorm4x8(rgba[0]);\n"
+            "    outdata.y = packUnorm4x8(rgba[1]);\n"
+            "    outdata.z = packUnorm4x8(rgba[2]);\n"
+            "    outdata.w = packUnorm4x8(rgba[3]);\n"
+			"    imageStore(output_image, pos, outdata);\n"
             "}\n";
     
     // Load the vertex/fragment shaders
@@ -224,14 +225,42 @@ int initProgram(){
 }
 
 int initVBO(void){
-    glGenBuffers(4,  esContext.vbo);
+    GLuint fboid;
+    GLuint texIn, texOut;
+
+    glGenFramebuffers(1, &fboid);
+    glBindFramebuffer(GL_FRAMEBUFFER, fboid);
+
+    glGenTextures(1, &texOut);  
+    glBindTexture(GL_TEXTURE_2D, texOut);
+    printf("line:%d glError:%x\n", __LINE__, glGetError());
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32UI, esContext.width / 4, esContext.height);
+    printf("line:%d glError:%x\n", __LINE__, glGetError());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    printf("line:%d glError:%x\n", __LINE__, glGetError());
+    
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texOut, 0);
+    printf("line:%d glError:%x\n", __LINE__, glGetError());
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if(status != GL_FRAMEBUFFER_COMPLETE){
+        printf("failed  %x\n", status);
+    }
+
+    glGenBuffers(3,  esContext.vbo);
     printf("line:%d glError:%x\n", __LINE__, glGetError()); 
     
-    glBindBuffer(GL_ARRAY_BUFFER, esContext.vbo[3]);
-    printf("line:%d glError:%x\n", __LINE__, glGetError());
-    glBufferData(GL_ARRAY_BUFFER, esContext.width * esContext.height * 4, NULL, GL_DYNAMIC_READ);
-    printf("line:%d glError:%x\n", __LINE__, glGetError());
-    
+    glGenBuffers(1, &esContext.pboid);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, esContext.pboid);
+    glBufferData(GL_PIXEL_PACK_BUFFER, esContext.width * esContext.height * 4, NULL, GL_DYNAMIC_READ);
+    //glBindBuffer(GL_ARRAY_BUFFER, esContext.vbo[3]);
+    //printf("line:%d glError:%x\n", __LINE__, glGetError());
+    //glBufferData(GL_ARRAY_BUFFER, esContext.width * esContext.height * 4, NULL, GL_DYNAMIC_READ);
+    //printf("line:%d glError:%x\n", __LINE__, glGetError());
+	esContext.fboid = fboid;
+    esContext.texOut = texOut;
     return 0;
 }
 
@@ -262,7 +291,8 @@ void performCompute(char *y, char *u, char *v){
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, esContext.vbo[2]);
     printf("line:%d glError:%x\n", __LINE__, glGetError());
     
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, esContext.vbo[3]);
+    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, esContext.vbo[3]);
+	glBindImageTexture(1, esContext.texOut, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32UI);
     printf("line:%d glError:%x\n", __LINE__, glGetError());
     
     glDispatchCompute((esContext.width/4 + 31) / 32, (esContext.height + 31) /32, 1);   // process 1920/4 1080
@@ -305,7 +335,14 @@ int main(int argc, char *argv[]){
     
     while(fread(bufin, size, 3, fin) && count-- > 0){
         performCompute(y, u, v);
-        
+		glReadBuffer(GL_COLOR_ATTACHMENT0);
+		glReadPixels(0, 0, width/4, height, GL_RGBA_INTEGER, GL_UNSIGNED_INT, 0);
+        src = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size * 4, GL_MAP_READ_BIT);
+        memcpy(bufout, src, size * 4);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+   	 	printf("line:%d glError:%x\n", __LINE__, glGetError());
+
+        #if 0
         printf("line:%d glError:%x\n", __LINE__, glGetError());
         glBindBuffer(GL_ARRAY_BUFFER, esContext.vbo[3]);
         printf("line:%d glError:%x\n", __LINE__, glGetError());
@@ -314,6 +351,7 @@ int main(int argc, char *argv[]){
         
         memcpy(bufout, src, size * 4);
         glUnmapBuffer(GL_ARRAY_BUFFER);
+		#endif
         
         fwrite(bufout, size, 4, fout);
     }
