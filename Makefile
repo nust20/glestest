@@ -9,10 +9,12 @@ INCLUDE_DIR += -isystem $(NDK_PATH)/sources/cxx-stl/gnu-libstdc++/4.9/include
 INCLUDE_DIR += -isystem $(NDK_PATH)/sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/include
 
 LIBS_DIR = -L $(NDK_PATH)/sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a
-CFLAGS = -fPIE -pie
+CFLAGS = -g -std=c++11 -fPIE -pie -Wl,-allow-shlib-undefined -DHAVE_ANDROID_OS
 
-gltest:glestest.cpp
-	$(CC) $(INCLUDE_DIR) $(LIBS_DIR) $(CFLAGS)  -g glestest.cpp -o gltest -lEGL -lGLESv3
+gltest:glestest/glestest.cpp
+	$(CC) $(INCLUDE_DIR) $(LIBS_DIR) $(CFLAGS)  -g glestest/glestest.cpp -o gltest -lEGL -lGLESv3
 
+glconvert: glesconvert/main.cpp glesconvert/GLESConvert.cpp
+	$(CC) $(INCLUDE_DIR) $(LIBS_DIR) $(CFLAGS)  -g glesconvert/main.cpp glesconvert/GLESConvert.cpp -o glconvert -lEGL -lGLESv3 -lgnustl_static
 clean:
-	rm gltest
+	rm gltest glconvert
